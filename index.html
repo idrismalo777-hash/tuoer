@@ -189,14 +189,12 @@ const KEY='sk-b547dd78b9aa422bbda6c801c055d04f';
 
 // API 配置：支持多个端点，自动回退
 const API_CONFIG={
-    // 外网端点（Cloudflare Workers）
-    external:'https://wispy-wildflower-8ee4.idrismalo777.workers.dev',
-    // 内网端点（如果部署在内网，修改为内网地址）
-    // 例如：'http://192.168.1.100:3000/api' 或 '/api'（相对路径）
-    internal:null, // 设置为 null 表示不使用内网端点，或填入内网 API 地址
-    // 如果部署在 GitHub Pages 同域名下，可以使用相对路径
-    // 例如：'/api/chat' 或 './api/chat'
-    relative:null // 设置为 null 表示不使用相对路径，或填入相对路径
+    // 外网端点（腾讯云 SCF）
+    external:'https://1401966539-3eg6qjoten.ap-guangzhou.tencentscf.com',
+    // 内网端点
+    internal:null,
+    // 相对路径
+    relative:null
 };
 
 // 获取当前可用的 API 地址
