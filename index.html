@@ -186,7 +186,39 @@ const AGENTS=[
 
 let agent=null,msgs=[],loading=false;
 const KEY='sk-b547dd78b9aa422bbda6c801c055d04f';
-const WORKER='https://wispy-wildflower-8ee4.idrismalo777.workers.dev';
+
+// API 配置：支持多个端点，自动回退
+const API_CONFIG={
+    // 外网端点（Cloudflare Workers）
+    external:'https://wispy-wildflower-8ee4.idrismalo777.workers.dev',
+    // 内网端点（如果部署在内网，修改为内网地址）
+    // 例如：'http://192.168.1.100:3000/api' 或 '/api'（相对路径）
+    internal:null, // 设置为 null 表示不使用内网端点，或填入内网 API 地址
+    // 如果部署在 GitHub Pages 同域名下，可以使用相对路径
+    // 例如：'/api/chat' 或 './api/chat'
+    relative:null // 设置为 null 表示不使用相对路径，或填入相对路径
+};
+
+// 获取当前可用的 API 地址
+function getAPIEndpoint(){
+    // 优先使用相对路径（如果配置了）
+    if(API_CONFIG.relative){
+        return API_CONFIG.relative;
+    }
+    // 检测是否为内网环境（简单检测：hostname 是否为内网 IP 或 localhost）
+    const hostname=window.location.hostname;
+    const isInternal=hostname==='localhost'||hostname==='127.0.0.1'||
+                     hostname.startsWith('192.168.')||hostname.startsWith('10.')||
+                     hostname.startsWith('172.')||hostname.includes('.local');
+    
+    // 如果是内网环境且有内网端点配置，使用内网端点
+    if(isInternal&&API_CONFIG.internal){
+        return API_CONFIG.internal;
+    }
+    
+    // 默认使用外网端点
+    return API_CONFIG.external;
+}
 
 function $(id){return document.getElementById(id)}
 function getTime(){return new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}
@@ -253,24 +285,62 @@ function addMsg(text,isUser){
     $('msgList').scrollTop=$('msgList').scrollHeight;
 }
 
+// 尝试调用 API，支持多个端点回退
 async function callAPI(m){
-    try{
-        const r=await fetch(WORKER,{
-            method:'POST',
-            headers:{'Content-Type':'application/json','Authorization':'Bearer '+KEY},
-            body:JSON.stringify({
-                model:'deepseek-chat',
-                messages:[{role:'system',content:agent.sys},...msgs.map(x=>({role:x.role,content:x.content})),{role:'user',content:m}],
-                max_tokens:200,temperature:0.9
-            })
-        });
-        const d=await r.json();
-        if(d.error)throw new Error(d.error.message);
-        return d.choices[0].message.content;
-    }catch(e){
-        console.error(e);
-        return null;
+    const endpoints=[];
+    
+    // 构建端点列表（优先级从高到低）
+    if(API_CONFIG.relative)endpoints.push(API_CONFIG.relative);
+    const currentEndpoint=getAPIEndpoint();
+    if(currentEndpoint!==API_CONFIG.relative)endpoints.push(currentEndpoint);
+    if(API_CONFIG.external&&!endpoints.includes(API_CONFIG.external))endpoints.push(API_CONFIG.external);
+    if(API_CONFIG.internal&&!endpoints.includes(API_CONFIG.internal))endpoints.push(API_CONFIG.internal);
+    
+    // 尝试每个端点
+    for(const endpoint of endpoints){
+        try{
+            console.log('尝试 API 端点:',endpoint);
+            const r=await fetch(endpoint,{
+                method:'POST',
+                headers:{'Content-Type':'application/json','Authorization':'Bearer '+KEY},
+                body:JSON.stringify({
+                    model:'deepseek-chat',
+                    messages:[{role:'system',content:agent.sys},...msgs.map(x=>({role:x.role,content:x.content})),{role:'user',content:m}],
+                    max_tokens:200,temperature:0.9
+                }),
+                // 添加超时控制（兼容性处理）
+                signal:(()=>{
+                    const controller=new AbortController();
+                    setTimeout(()=>controller.abort(),30000); // 30秒超时
+                    return controller.signal;
+                })()
+            });
+            
+            if(!r.ok){
+                throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+            }
+            
+            const d=await r.json();
+            if(d.error)throw new Error(d.error.message||'API 返回错误');
+            if(!d.choices||!d.choices[0]||!d.choices[0].message){
+                throw new Error('API 响应格式错误');
+            }
+            
+            console.log('API 调用成功，使用端点:',endpoint);
+            return d.choices[0].message.content;
+        }catch(e){
+            console.warn(`端点 ${endpoint} 失败:`,e.message);
+            // 如果是最后一个端点，返回 null
+            if(endpoint===endpoints[endpoints.length-1]){
+                console.error('所有 API 端点都失败了');
+                return null;
+            }
+            // 继续尝试下一个端点
+            continue;
+        }
     }
+    
+    return null;
 }
 
 async function delay(ms){return new Promise(r=>setTimeout(r,ms))}
@@ -299,7 +369,19 @@ async function send(){
         $('sendBtn').disabled=false;
         $('toast').classList.remove('show');
         $('quickBtns').style.display='flex';
-        addMsg('不好意思 网络有点问题 您再发一次~',false);
+        
+        // 检测网络环境，给出更具体的错误提示
+        const hostname=window.location.hostname;
+        const isInternal=hostname==='localhost'||hostname==='127.0.0.1'||
+                         hostname.startsWith('192.168.')||hostname.startsWith('10.')||
+                         hostname.startsWith('172.')||hostname.includes('.local');
+        
+        let errorMsg='不好意思 网络有点问题 您再发一次~';
+        if(isInternal){
+            errorMsg='内网环境下无法连接到 API 服务，请检查：\n1. 是否配置了内网 API 地址\n2. 内网 API 服务是否正常运行\n3. 网络连接是否正常';
+        }
+        
+        addMsg(errorMsg,false);
         return;
     }
     
